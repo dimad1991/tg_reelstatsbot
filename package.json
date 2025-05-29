@@ -5,9 +5,6 @@
   "private": true,
   "scripts": {
     "start": "node index.js",
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
     "bot": "DEBUG=telegram-bot node index.js",
     "bot:prod": "NODE_ENV=production DEBUG=telegram-bot node index.js"
   },
