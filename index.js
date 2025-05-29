@@ -22,7 +22,20 @@ log('Environment variables checked successfully');
 // Create HTTP server for Render
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
+const url = new URL(req.url, `http://${req.headers.host}`);
+if (url.pathname === '/stats') {
+  if (!isAuthorizedKey(url.searchParams)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+  const stats = loadStats();
+  const html = renderStatsHtml(stats);
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(html);
+} else {
   res.end('Bot is running');
+}
 });
 
 // Initialize bot with polling disabled initially
@@ -395,7 +408,7 @@ function setupMessageHandlers(bot) {
     }
   });
 
-  bot.on('callback_query', async (query) => {
+  ('callback_query', async (query) => {
     try {
       const chatId = query.message.chat.id;
 
@@ -421,7 +434,11 @@ function setupMessageHandlers(bot) {
       if (url.startsWith('@') || !url.includes('/')) {
         url = await normalizeInstagramInput(url);
       }
-      
+      logEvent({
+  userId: msg.from.id,
+  username: msg.from.username,
+  query: url
+});   
       const isValidUrl = url.toLowerCase().includes('instagram.com') || url.toLowerCase().includes('tiktok.com');
       if (!isValidUrl) {
         await bot.sendMessage(msg.chat.id, 'Чтобы получить статистику по нужному вам профилю, *отправьте 🔗 ссылку* или *username* на аккаунт в бот.', { parse_mode: 'Markdown' });
