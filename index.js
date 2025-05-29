@@ -293,7 +293,7 @@ async function fetchSocialStats(url) {
     const viewsToFollowersCoef = avgViewsLast5 > profileData.follower_count * 2 ? 1.2 : 1;
 
     const hasViralReel = last5Reels.some(reel => reel.play_count > medianViews * 10);
-    const viralCoef = hasViralReel ? 1.2 : 1;
+    const viralCoef = hasViralReel ? 1.8 : 1;
 
     const predictedReach = medianViews * reelsCountCoef * viewsToFollowersCoef * viralCoef;
 
