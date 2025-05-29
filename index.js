@@ -21,21 +21,22 @@ log('Environment variables checked successfully');
 
 // Create HTTP server for Render
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-const url = new URL(req.url, `http://${req.headers.host}`);
-if (url.pathname === '/stats') {
-  if (!isAuthorizedKey(url.searchParams)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === '/stats') {
+    if (!isAuthorizedKey(url.searchParams)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+    const stats = loadStats();
+    const html = renderStatsHtml(stats);
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(html);
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running');
   }
-  const stats = loadStats();
-  const html = renderStatsHtml(stats);
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(html);
-} else {
-  res.end('Bot is running');
-}
 });
 
 // Initialize bot with polling disabled initially
