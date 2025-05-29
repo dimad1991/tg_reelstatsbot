@@ -16,4 +16,4 @@ services:
     buildFilter:
       paths:
         - package.json
-        - src/**
+        - index.js
