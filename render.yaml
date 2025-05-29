@@ -3,16 +3,13 @@ services:
     name: telegram-bot
     env: node
     buildCommand: npm install
-    startCommand: npm run bot:prod
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: DEBUG
         value: telegram-bot
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
     autoDeploy: true
-    healthCheckPath: /
     buildFilter:
       paths:
         - package.json
