@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
+import { logEvent, loadStats, renderStatsHtml, isAuthorizedKey } from './analytics.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
