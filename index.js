@@ -5,7 +5,6 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
-import { logEvent, loadStats, renderStatsHtml, isAuthorizedKey } from './analytics.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
@@ -21,22 +20,8 @@ log('Environment variables checked successfully');
 
 // Create HTTP server for Render
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-
-  if (url.pathname === '/stats') {
-    if (!isAuthorizedKey(url.searchParams)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      res.end('Forbidden');
-      return;
-    }
-    const stats = loadStats();
-    const html = renderStatsHtml(stats);
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(html);
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running');
-  }
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running');
 });
 
 // Initialize bot with polling disabled initially
@@ -263,64 +248,65 @@ async function fetchSocialStats(url) {
       return postDate >= thirtyDaysAgo;
     });
 
+    // Calculate total engagement for all posts in last 30 days
+    const totalEngagement30Days = postsLast30Days.reduce((sum, post) => {
+      return sum + post.like_count + post.comment_count + (post.share_count || 0) + (post.saves_count || 0);
+    }, 0);
+
+    // Calculate account ER for last 30 days
+    const averageEngagementPer30DaysPost = postsLast30Days.length > 0 ? 
+      totalEngagement30Days / postsLast30Days.length : 0;
+    const accountER = (averageEngagementPer30DaysPost / profileData.follower_count) * 100;
+
     const reelsLast30Days = postsLast30Days.filter(post => post.media_type === 2);
 
-    const last9Reels = reelsData
-      .filter(reel => reel.media_type === 2)
-      .slice(0, 9);
-
-    const viewCounts = last9Reels.map(reel => reel.play_count).sort((a, b) => a - b);
-    const medianViews = viewCounts.length > 0
-      ? viewCounts[Math.floor(viewCounts.length / 2)]
-      : 0;
-
-    const totalEngagement9Reels = last9Reels.reduce((sum, reel) => {
+    // Calculate Reels metrics for last 30 days
+    const totalReelsEngagement30Days = reelsLast30Days.reduce((sum, reel) => {
       return sum + reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
     }, 0);
-    const averageEngagementPer9Reels = last9Reels.length > 0 ? totalEngagement9Reels / 9 : 0;
-    const er = (averageEngagementPer9Reels / profileData.follower_count) * 100;
 
-    const totalViews9Reels = last9Reels.reduce((sum, reel) => sum + reel.play_count, 0);
-    const err = totalViews9Reels > 0 ? (totalEngagement9Reels / totalViews9Reels) * 100 : 0;
+    const totalReelsViews30Days = reelsLast30Days.reduce((sum, reel) => sum + reel.play_count, 0);
+    
+    const averageReelsEngagement30Days = reelsLast30Days.length > 0 ? 
+      totalReelsEngagement30Days / reelsLast30Days.length : 0;
+    
+    const averageReelsViews30Days = reelsLast30Days.length > 0 ? 
+      totalReelsViews30Days / reelsLast30Days.length : 0;
 
+    const reelsER30Days = (averageReelsEngagement30Days / profileData.follower_count) * 100;
+    const reelsERR30Days = averageReelsViews30Days > 0 ? 
+      (averageReelsEngagement30Days / averageReelsViews30Days) * 100 : 0;
+
+    // Get median views for Reels in last 30 days
+    const viewCounts30Days = reelsLast30Days
+      .map(reel => reel.play_count)
+      .sort((a, b) => a - b);
+    const medianViews30Days = viewCounts30Days.length > 0 ?
+      viewCounts30Days[Math.floor(viewCounts30Days.length / 2)] : 0;
+
+    // Calculate prediction coefficients
     const reelsCountCoef = reelsLast30Days.length >= 10 ? 1.2 : 0.8;
 
     const last5Reels = reelsData
       .filter(reel => reel.media_type === 2)
       .slice(0, 5);
 
-    const avgViewsLast5 = last5Reels.reduce((sum, reel) => sum + reel.play_count, 0) / 5;
-    const viewsToFollowersCoef = avgViewsLast5 > profileData.follower_count * 2 ? 1.2 : 1;
+    const medianViewsLast5 = [...last5Reels]
+      .map(reel => reel.play_count)
+      .sort((a, b) => a - b)[Math.floor(last5Reels.length / 2)] || 0;
+    
+    const viewsToFollowersCoef = medianViewsLast5 > profileData.follower_count * 2 ? 1.2 : 1;
 
-    const hasViralReel = last5Reels.some(reel => reel.play_count > medianViews * 10);
-    const viralCoef = hasViralReel ? 1.8 : 1;
+    const last3Reels = reelsData
+      .filter(reel => reel.media_type === 2)
+      .slice(0, 3);
 
-    const predictedReach = medianViews * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const hasViralReel = last3Reels.some(reel => reel.play_count > medianViews30Days * 10);
+    const viralCoef = hasViralReel ? 1.4 : 1;
 
-    let baseER = er;
-    if (baseER === 0 && reelsData.length >= 3) {
-      const last3Reels = reelsData
-        .filter(reel => reel.media_type === 2)
-        .slice(0, 3);
-      const totalEngagement3Reels = last3Reels.reduce((sum, reel) => {
-        return sum + reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
-      }, 0);
-      baseER = (totalEngagement3Reels / 3 / profileData.follower_count) * 100;
-    }
-    const predictedER = baseER * reelsCountCoef * viewsToFollowersCoef * viralCoef;
-
-    let baseERR = err;
-    if (baseERR === 0 && reelsData.length >= 3) {
-      const last3Reels = reelsData
-        .filter(reel => reel.media_type === 2)
-        .slice(0, 3);
-      const totalEngagement3Reels = last3Reels.reduce((sum, reel) => {
-        return sum + reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
-      }, 0);
-      const totalViews3Reels = last3Reels.reduce((sum, reel) => sum + reel.play_count, 0);
-      baseERR = totalViews3Reels > 0 ? (totalEngagement3Reels / totalViews3Reels) * 100 : 0;
-    }
-    const predictedERR = baseERR * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const predictedReach = medianViews30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const predictedER = reelsER30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const predictedERR = reelsERR30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
 
     return {
       username: profileData.username,
@@ -330,10 +316,11 @@ async function fetchSocialStats(url) {
       following: profileData.following_count,
       totalPosts: profileData.media_count,
       postsLast30Days: postsLast30Days.length,
+      accountER,
       reelsLast30Days: reelsLast30Days.length,
-      medianViews,
-      er,
-      err,
+      medianViews30Days,
+      reelsER30Days,
+      reelsERR30Days,
       predictedReach,
       predictedER,
       predictedERR
@@ -409,7 +396,7 @@ function setupMessageHandlers(bot) {
     }
   });
 
-  ('callback_query', async (query) => {
+  bot.on('callback_query', async (query) => {
     try {
       const chatId = query.message.chat.id;
 
@@ -435,11 +422,7 @@ function setupMessageHandlers(bot) {
       if (url.startsWith('@') || !url.includes('/')) {
         url = await normalizeInstagramInput(url);
       }
-      logEvent({
-  userId: msg.from.id,
-  username: msg.from.username,
-  query: url
-});   
+      
       const isValidUrl = url.toLowerCase().includes('instagram.com') || url.toLowerCase().includes('tiktok.com');
       if (!isValidUrl) {
         await bot.sendMessage(msg.chat.id, 'Чтобы получить статистику по нужному вам профилю, *отправьте 🔗 ссылку* или *username* на аккаунт в бот.', { parse_mode: 'Markdown' });
@@ -453,29 +436,37 @@ function setupMessageHandlers(bot) {
       const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
       
       const response = `*Имя:* ${escapedFullName}
+*URL:* ${stats.profileUrl}
 —————————————————
 
-*📊 Статистика аккаунта:*
+*👁️ Информация об аккаунте:*
 
 • Подписчиков — ${stats.followers.toLocaleString()}
 • Подписок — ${stats.following.toLocaleString()}
 • Всего публикаций — ${stats.totalPosts.toLocaleString()}
-• Публикаций за последний месяц — ${stats.postsLast30Days.toLocaleString()}
 —————————————————
 
-*👁️ Статистика Reels:*
+*📊 Статистика Аккаунта*
+*(за последние 30 дней):*
 
-• Reels за последний месяц — ${stats.reelsLast30Days.toLocaleString()}
-• Медиана просмотров Reels — ${stats.medianViews.toLocaleString()}
-• ER Reels — ${stats.er.toFixed(2)}%
-• ERR Reels — ${stats.err.toFixed(2)}%
+• Публикаций — ${stats.postsLast30Days.toLocaleString()}
+• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.accountER.toFixed(2)}%
+—————————————————
+
+*📊 Статистика Reels*
+*(за последние 30 дней):*
+
+• Reels — ${stats.reelsLast30Days.toLocaleString()}
+• Медиана просмотров [ⓘ](https://telegra.ph/Formula-Mediany-prosmotrov-06-05) — ${stats.medianViews30Days.toLocaleString()}
+• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.reelsER30Days.toFixed(2)}%
+• ERV [ⓘ](https://telegra.ph/Formula-Engagement-Rate-Views-ERV-06-05) — ${stats.reelsERR30Days.toFixed(2)}%
 —————————————————
 
 *📈 Прогноз Reels:*
 
-• Охват — ${Math.round(stats.predictedReach).toLocaleString()}
+• Охват [ⓘ](https://telegra.ph/Formula-prognoza-ohvatov-Reels-06-05) — ${Math.round(stats.predictedReach).toLocaleString()}
 • ER — ${stats.predictedER.toFixed(2)}%
-• ERR — ${stats.predictedERR.toFixed(2)}%
+• ERV — ${stats.predictedERR.toFixed(2)}%
 —————————————————
 
 Чтобы получить статистику по нужному вам профилю, отправьте ссылку или username на аккаунт в бот\\.`;
