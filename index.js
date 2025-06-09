@@ -5,9 +5,13 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
+import AnalyticsTracker from './src/analytics.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
+
+// Initialize analytics tracker
+const analytics = new AnalyticsTracker();
 
 // Log environment check
 log('Checking environment variables...');
@@ -38,6 +42,9 @@ server.listen(PORT, '0.0.0.0', async () => {
   log(`Server is running on port ${PORT}`);
   
   try {
+    // Initialize analytics
+    await analytics.initialize();
+    
     // Start bot polling after server is running
     await bot.startPolling();
     console.log('Bot polling started successfully');
@@ -45,6 +52,11 @@ server.listen(PORT, '0.0.0.0', async () => {
     
     // Set up message handlers
     setupMessageHandlers(bot);
+    
+    // Set up periodic analytics sync (every 5 minutes)
+    setInterval(async () => {
+      await analytics.syncToSheets();
+    }, 5 * 60 * 1000);
     
     console.log('Bot and server are both running');
     log('Bot and server are both running');
@@ -382,6 +394,15 @@ function setupMessageHandlers(bot) {
   bot.onText(/\/start/, async (msg) => {
     try {
       log('Received /start command from:', msg.chat.id);
+      
+      // Track the message
+      await analytics.trackMessage(
+        msg.from.id, 
+        msg.from.username, 
+        '/start', 
+        'command'
+      );
+      
       await bot.sendMessage(msg.chat.id, 
         'Чтобы начать работу, отправь в чат ссылку на аккаунт, который нужно проверить'
       );
@@ -400,6 +421,14 @@ function setupMessageHandlers(bot) {
     try {
       const chatId = query.message.chat.id;
 
+      // Track callback query
+      await analytics.trackMessage(
+        query.from.id,
+        query.from.username,
+        `callback: ${query.data}`,
+        'callback'
+      );
+
       if (query.data === 'forecast_info') {
         await bot.sendMessage(chatId, FORECAST_INFO);
       } else if (query.data === 'contact_author') {
@@ -417,6 +446,15 @@ function setupMessageHandlers(bot) {
 
     try {
       log('Processing message:', msg.text);
+      
+      // Track the message
+      await analytics.trackMessage(
+        msg.from.id,
+        msg.from.username,
+        msg.text,
+        'text'
+      );
+      
       let url = msg.text.trim();
       
       if (url.startsWith('@') || !url.includes('/')) {
@@ -431,11 +469,22 @@ function setupMessageHandlers(bot) {
 
       await bot.sendMessage(msg.chat.id, 'Работаю ⚙️ Не уходите из чата, это займет меньше минуты.');
 
-      const stats = await fetchSocialStats(url);
-      
-      const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-      
-      const response = `*Имя:* ${escapedFullName}
+      let success = false;
+      try {
+        const stats = await fetchSocialStats(url);
+        success = true;
+        
+        // Track successful profile request
+        await analytics.trackProfileRequest(
+          msg.from.id,
+          msg.from.username,
+          url,
+          true
+        );
+        
+        const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+        
+        const response = `*Имя:* ${escapedFullName}
 *URL:* ${stats.profileUrl}
 —————————————————
 
@@ -471,31 +520,43 @@ function setupMessageHandlers(bot) {
 
 Чтобы получить статистику по нужному вам профилю, отправьте ссылку или username на аккаунт в бот\\.`;
 
-      const inlineKeyboard = {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: 'Как бот составляет прогноз?',
-                callback_data: 'forecast_info'
-              }
-            ],
-            [
-              {
-                text: 'Связаться с автором бота',
-                callback_data: 'contact_author'
-              }
+        const inlineKeyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: 'Как бот составляет прогноз?',
+                  callback_data: 'forecast_info'
+                }
+              ],
+              [
+                {
+                  text: 'Связаться с автором бота',
+                  callback_data: 'contact_author'
+                }
+              ]
             ]
-          ]
-        },
-        parse_mode: 'Markdown'
-      };
+          },
+          parse_mode: 'Markdown'
+        };
 
-      await bot.sendMessage(msg.chat.id, response, inlineKeyboard);
-      log('Stats sent successfully for URL:', url);
+        await bot.sendMessage(msg.chat.id, response, inlineKeyboard);
+        log('Stats sent successfully for URL:', url);
+      } catch (error) {
+        // Track failed profile request
+        await analytics.trackProfileRequest(
+          msg.from.id,
+          msg.from.username,
+          url,
+          false
+        );
+        
+        log('Error processing message:', error);
+        await bot.sendMessage(msg.chat.id, error.message);
+      }
     } catch (error) {
-      log('Error processing message:', error);
-      await bot.sendMessage(msg.chat.id, error.message);
+      log('Error in message handler:', error);
+      await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
     }
   });
 }
