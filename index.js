@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
-import AnalyticsTracker from './analytics.js';
+import AnalyticsTracker from './src/analytics.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
@@ -29,12 +29,38 @@ const server = http.createServer((req, res) => {
 });
 
 // Initialize bot with polling disabled initially
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-  polling: false
-});
+let bot = null;
+let isPolling = false;
 
 // Explicitly bind to PORT from environment or fallback to 3000
 const PORT = process.env.PORT || 3000;
+
+// Graceful shutdown handler
+const gracefulShutdown = async (signal) => {
+  console.log(`Received ${signal}. Graceful shutdown...`);
+  log(`Received ${signal}. Graceful shutdown...`);
+  
+  if (bot && isPolling) {
+    try {
+      await bot.stopPolling();
+      console.log('Bot polling stopped');
+      log('Bot polling stopped');
+    } catch (error) {
+      console.error('Error stopping bot polling:', error);
+      log('Error stopping bot polling:', error);
+    }
+  }
+  
+  server.close(() => {
+    console.log('Server closed');
+    log('Server closed');
+    process.exit(0);
+  });
+};
+
+// Handle process signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Start server and bot
 server.listen(PORT, '0.0.0.0', async () => {
@@ -42,11 +68,49 @@ server.listen(PORT, '0.0.0.0', async () => {
   log(`Server is running on port ${PORT}`);
   
   try {
-    // Initialize analytics
-    await analytics.initialize();
+    // Initialize analytics first
+    const analyticsInitialized = await analytics.initialize();
+    if (analyticsInitialized) {
+      console.log('Analytics initialized successfully');
+      log('Analytics initialized successfully');
+    } else {
+      console.log('Analytics initialization skipped (credentials not configured)');
+      log('Analytics initialization skipped (credentials not configured)');
+    }
     
-    // Start bot polling after server is running
-    await bot.startPolling();
+    // Stop any existing polling before starting new instance
+    if (bot) {
+      try {
+        await bot.stopPolling();
+        console.log('Stopped existing bot polling');
+        log('Stopped existing bot polling');
+      } catch (error) {
+        console.log('No existing polling to stop');
+        log('No existing polling to stop');
+      }
+    }
+    
+    // Create new bot instance
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+      polling: false
+    });
+    
+    // Add a small delay before starting polling
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Start bot polling
+    await bot.startPolling({
+      restart: false,
+      polling: {
+        interval: 1000,
+        autoStart: false,
+        params: {
+          timeout: 10
+        }
+      }
+    });
+    
+    isPolling = true;
     console.log('Bot polling started successfully');
     log('Bot polling started successfully');
     
@@ -54,16 +118,62 @@ server.listen(PORT, '0.0.0.0', async () => {
     setupMessageHandlers(bot);
     
     // Set up periodic analytics sync (every 5 minutes)
-    setInterval(async () => {
-      await analytics.syncToSheets();
-    }, 5 * 60 * 1000);
+    if (analyticsInitialized) {
+      setInterval(async () => {
+        try {
+          await analytics.syncToSheets();
+          log('Periodic analytics sync completed');
+        } catch (error) {
+          log('Error in periodic analytics sync:', error);
+        }
+      }, 5 * 60 * 1000);
+    }
     
     console.log('Bot and server are both running');
     log('Bot and server are both running');
   } catch (error) {
-    console.error('Failed to start bot polling:', error);
-    log('Failed to start bot polling:', error);
-    process.exit(1);
+    console.error('Failed to start bot:', error);
+    log('Failed to start bot:', error);
+    
+    // If it's a polling conflict, try to resolve it
+    if (error.message.includes('409') || error.message.includes('Conflict')) {
+      console.log('Detected polling conflict, attempting to resolve...');
+      log('Detected polling conflict, attempting to resolve...');
+      
+      try {
+        // Delete webhook if it exists
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteWebhook`);
+        console.log('Webhook deleted');
+        log('Webhook deleted');
+        
+        // Wait a bit and try again
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        if (bot) {
+          await bot.startPolling({
+            restart: true,
+            polling: {
+              interval: 1000,
+              autoStart: false,
+              params: {
+                timeout: 10
+              }
+            }
+          });
+          
+          isPolling = true;
+          setupMessageHandlers(bot);
+          console.log('Bot polling restarted successfully after conflict resolution');
+          log('Bot polling restarted successfully after conflict resolution');
+        }
+      } catch (retryError) {
+        console.error('Failed to resolve polling conflict:', retryError);
+        log('Failed to resolve polling conflict:', retryError);
+        process.exit(1);
+      }
+    } else {
+      process.exit(1);
+    }
   }
 });
 
