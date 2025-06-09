@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
-import AnalyticsTracker from './src/analytics.js';
+import AnalyticsTracker from './analytics.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
