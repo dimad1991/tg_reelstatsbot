@@ -77,8 +77,9 @@ class AnalyticsTracker {
       const requiredSheets = [
         { title: 'Messages', headers: ['Timestamp', 'User ID', 'Username', 'Message', 'Message Type'] },
         { title: 'Profile Requests', headers: ['Timestamp', 'User ID', 'Username', 'Profile URL', 'Success'] },
-        { title: 'User Statistics', headers: ['User ID', 'Username', 'Total Messages', 'Profile Requests', 'First Seen', 'Last Seen'] },
-        { title: 'Summary', headers: ['Metric', 'Value', 'Last Updated'] }
+        { title: 'User Statistics', headers: ['User ID', 'Username', 'Total Messages', 'Profile Requests', 'First Seen', 'Last Seen', 'Tariff', 'Checks Remaining', 'Checks Used', 'Tariff Start Date', 'Tariff End Date'] },
+        { title: 'Summary', headers: ['Metric', 'Value', 'Last Updated'] },
+        { title: 'Payments', headers: ['Timestamp', 'User ID', 'Username', 'Payment ID', 'Tariff', 'Amount', 'Status'] }
       ];
 
       for (const sheetConfig of requiredSheets) {
@@ -157,7 +158,12 @@ class AnalyticsTracker {
           totalMessages: 0,
           profileRequests: 0,
           firstSeen: timestamp,
-          lastSeen: timestamp
+          lastSeen: timestamp,
+          tariff: 'TEST',
+          checksRemaining: 5,
+          checksUsed: 0,
+          tariffStartDate: timestamp,
+          tariffEndDate: null
         });
       }
       
@@ -200,7 +206,12 @@ class AnalyticsTracker {
           totalMessages: 0,
           profileRequests: 0,
           firstSeen: timestamp,
-          lastSeen: timestamp
+          lastSeen: timestamp,
+          tariff: 'TEST',
+          checksRemaining: 5,
+          checksUsed: 0,
+          tariffStartDate: timestamp,
+          tariffEndDate: null
         });
       }
       
@@ -222,6 +233,140 @@ class AnalyticsTracker {
     } catch (error) {
       console.error('Error tracking profile request:', error.message);
       log('Error tracking profile request:', error);
+    }
+  }
+
+  async trackTariffAssignment(userId, username, tariffCode, amount, paymentId = null) {
+    if (!this.initialized) {
+      log('Analytics not initialized, skipping tariff assignment tracking');
+      return;
+    }
+
+    try {
+      const timestamp = new Date().toISOString();
+      
+      // Log to Payments sheet
+      await this.appendToSheet('Payments', [
+        timestamp,
+        userId,
+        username || 'Unknown',
+        paymentId || 'Manual',
+        tariffCode,
+        amount,
+        'COMPLETED'
+      ]);
+
+      log(`Tracked tariff assignment for user ${userId}: ${tariffCode}`);
+    } catch (error) {
+      console.error('Error tracking tariff assignment:', error.message);
+      log('Error tracking tariff assignment:', error);
+    }
+  }
+
+  async saveUserData(userData) {
+    if (!this.initialized) {
+      log('Analytics not initialized, skipping user data save');
+      return false;
+    }
+
+    try {
+      // Update in-memory stats
+      this.userStats.set(userData.userId, {
+        username: userData.username || 'Unknown',
+        totalMessages: userData.totalMessages || 0,
+        profileRequests: userData.profileRequests || 0,
+        firstSeen: userData.firstSeen || new Date().toISOString(),
+        lastSeen: userData.lastSeen || new Date().toISOString(),
+        tariff: userData.tariff || 'TEST',
+        checksRemaining: userData.checksRemaining || 5,
+        checksUsed: userData.checksUsed || 0,
+        tariffStartDate: userData.tariffStartDate || new Date().toISOString(),
+        tariffEndDate: userData.tariffEndDate || null
+      });
+
+      // We'll update the User Statistics sheet during the next sync
+      return true;
+    } catch (error) {
+      console.error('Error saving user data:', error.message);
+      log('Error saving user data:', error);
+      return false;
+    }
+  }
+
+  async getUserData(userId) {
+    if (!this.initialized) {
+      log('Analytics not initialized, skipping get user data');
+      return null;
+    }
+
+    try {
+      // Check in-memory cache first
+      if (this.userStats.has(userId)) {
+        return {
+          userId,
+          ...this.userStats.get(userId)
+        };
+      }
+
+      // Try to get from Google Sheets
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: 'User Statistics!A:K'
+      });
+
+      const rows = response.data.values || [];
+      if (rows.length <= 1) {
+        return null; // Only header row exists
+      }
+
+      // Find user in the sheet
+      const headers = rows[0];
+      const userIdIndex = headers.indexOf('User ID');
+      
+      if (userIdIndex === -1) {
+        return null; // User ID column not found
+      }
+
+      const userRow = rows.find(row => row[userIdIndex] == userId);
+      
+      if (!userRow) {
+        return null; // User not found
+      }
+
+      // Map row data to user object
+      const userData = {
+        userId: parseInt(userRow[headers.indexOf('User ID')], 10),
+        username: userRow[headers.indexOf('Username')],
+        totalMessages: parseInt(userRow[headers.indexOf('Total Messages')], 10) || 0,
+        profileRequests: parseInt(userRow[headers.indexOf('Profile Requests')], 10) || 0,
+        firstSeen: userRow[headers.indexOf('First Seen')],
+        lastSeen: userRow[headers.indexOf('Last Seen')],
+        tariff: userRow[headers.indexOf('Tariff')] || 'TEST',
+        checksRemaining: parseInt(userRow[headers.indexOf('Checks Remaining')], 10) || 5,
+        checksUsed: parseInt(userRow[headers.indexOf('Checks Used')], 10) || 0,
+        tariffStartDate: userRow[headers.indexOf('Tariff Start Date')],
+        tariffEndDate: userRow[headers.indexOf('Tariff End Date')] || null
+      };
+
+      // Update in-memory cache
+      this.userStats.set(userId, {
+        username: userData.username,
+        totalMessages: userData.totalMessages,
+        profileRequests: userData.profileRequests,
+        firstSeen: userData.firstSeen,
+        lastSeen: userData.lastSeen,
+        tariff: userData.tariff,
+        checksRemaining: userData.checksRemaining,
+        checksUsed: userData.checksUsed,
+        tariffStartDate: userData.tariffStartDate,
+        tariffEndDate: userData.tariffEndDate
+      });
+
+      return userData;
+    } catch (error) {
+      console.error('Error getting user data:', error.message);
+      log('Error getting user data:', error);
+      return null;
     }
   }
 
@@ -259,7 +404,12 @@ class AnalyticsTracker {
         stats.totalMessages,
         stats.profileRequests,
         stats.firstSeen,
-        stats.lastSeen
+        stats.lastSeen,
+        stats.tariff || 'TEST',
+        stats.checksRemaining || 5,
+        stats.checksUsed || 0,
+        stats.tariffStartDate || stats.firstSeen,
+        stats.tariffEndDate || ''
       ]);
 
       if (userData.length > 0) {
@@ -287,11 +437,23 @@ class AnalyticsTracker {
       const timestamp = new Date().toISOString();
       const uniqueUsers = this.userStats.size;
 
+      // Count users by tariff
+      const tariffCounts = {};
+      for (const [_, stats] of this.userStats.entries()) {
+        const tariff = stats.tariff || 'TEST';
+        tariffCounts[tariff] = (tariffCounts[tariff] || 0) + 1;
+      }
+
       const summaryData = [
         ['Total Messages', this.totalMessages, timestamp],
         ['Unique Users', uniqueUsers, timestamp],
         ['Total Profile Requests', this.totalProfiles, timestamp]
       ];
+
+      // Add tariff counts
+      Object.entries(tariffCounts).forEach(([tariff, count]) => {
+        summaryData.push([`Users on ${tariff} Tariff`, count, timestamp]);
+      });
 
       // Clear existing data (except headers)
       await this.sheets.spreadsheets.values.clear({
