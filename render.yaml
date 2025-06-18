@@ -3,9 +3,15 @@ services:
     name: telegram-bot
     env: node
     buildCommand: npm install
-    startCommand: npm start  # This runs "node index.js"
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: DEBUG
         value: telegram-bot
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - package.json
+        - index.js
+        - src/**
