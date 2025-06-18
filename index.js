@@ -6,6 +6,10 @@ import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
 import AnalyticsTracker from './src/analytics.js';
+import UserManager from './src/userManager.js';
+import PaymentManager from './src/paymentManager.js';
+import PaymentHandler from './src/paymentHandler.js';
+import { TARIFF_PLANS, MESSAGES, PAYMENT_BUTTONS } from './src/tariffs.js';
 
 const log = debug('telegram-bot');
 dotenv.config();
@@ -32,6 +36,11 @@ const server = http.createServer((req, res) => {
 let bot = null;
 let isPolling = false;
 let isShuttingDown = false;
+
+// Initialize managers
+let userManager = null;
+let paymentManager = null;
+let paymentHandler = null;
 
 // Explicitly bind to PORT from environment or fallback to 3000
 const PORT = process.env.PORT || 3000;
@@ -91,6 +100,14 @@ async function startBotPolling(retryCount = 0) {
     console.log('Bot polling started successfully');
     log('Bot polling started successfully');
     
+    // Initialize managers
+    userManager = new UserManager(analytics);
+    paymentManager = new PaymentManager();
+    paymentHandler = new PaymentHandler(paymentManager, userManager, bot);
+    
+    // Start payment handler server
+    paymentHandler.start();
+    
     // Set up message handlers
     setupMessageHandlers(bot);
     
@@ -141,6 +158,13 @@ const gracefulShutdown = async (signal) => {
     }
   }
   
+  // Stop payment handler server
+  if (paymentHandler) {
+    paymentHandler.stop();
+    console.log('Payment handler server stopped');
+    log('Payment handler server stopped');
+  }
+  
   // Sync analytics one last time
   try {
     await analytics.syncToSheets();
@@ -179,6 +203,358 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   log('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
+// Function to create payment buttons
+function createPaymentButtons() {
+  return PAYMENT_BUTTONS.map(button => {
+    if (button.url) {
+      return {
+        text: button.text,
+        url: button.url
+      };
+    } else {
+      return {
+        text: button.text,
+        callback_data: `tariff_${button.tariff}`
+      };
+    }
+  });
+}
+
+// Function to check if user can make a profile request
+async function checkUserCanMakeRequest(userId, username) {
+  try {
+    const result = await userManager.recordProfileCheck(userId);
+    
+    if (!result.success) {
+      // User has reached their limit
+      const userData = result.userData;
+      const messageTemplate = userData.tariff === 'TEST' ? 
+        MESSAGES.LIMIT_REACHED_TEST : 
+        MESSAGES.LIMIT_REACHED_PAID;
+      
+      // Send limit reached message with payment buttons
+      await bot.sendMessage(
+        userId,
+        messageTemplate,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [createPaymentButtons()]
+          }
+        }
+      );
+      
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    log('Error checking if user can make request:', error);
+    return true; // Allow request in case of error
+  }
+}
+
+// Function to handle tariff selection
+async function handleTariffSelection(userId, username, tariffCode) {
+  try {
+    // Initialize payment
+    const result = await paymentManager.initPayment(userId, tariffCode, username);
+    
+    if (!result.success) {
+      await bot.sendMessage(
+        userId,
+        `❌ Ошибка при создании платежа: ${result.error}\n\nПожалуйста, попробуйте позже или обратитесь к @dimadubovik.`
+      );
+      return;
+    }
+    
+    // Send payment link to user
+    await bot.sendMessage(
+      userId,
+      `🔗 Для оплаты тарифа "${tariffCode}" перейдите по ссылке:\n\n${result.paymentUrl}\n\nПосле успешной оплаты вы получите уведомление, и тариф будет активирован автоматически.`,
+      {
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    log('Error handling tariff selection:', error);
+    await bot.sendMessage(
+      userId,
+      '❌ Произошла ошибка при обработке выбора тарифа. Пожалуйста, попробуйте позже или обратитесь к @dimadubovik.'
+    );
+  }
+}
+
+function setupMessageHandlers(bot) {
+  bot.onText(/\/start/, async (msg) => {
+    try {
+      log('Received /start command from:', msg.chat.id);
+      
+      // Track the message
+      await analytics.trackMessage(
+        msg.from.id, 
+        msg.from.username, 
+        '/start', 
+        'command'
+      );
+      
+      await bot.sendMessage(msg.chat.id, 
+        'Чтобы начать работу, отправь в чат ссылку на аккаунт, который нужно проверить'
+      );
+      log('Welcome message sent successfully to:', msg.chat.id);
+    } catch (error) {
+      log('Error sending welcome message:', error);
+      try {
+        await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
+      } catch (retryError) {
+        log('Error sending error message:', retryError);
+      }
+    }
+  });
+
+  // Add tariff info command
+  bot.onText(/\/tariff/, async (msg) => {
+    try {
+      log('Received /tariff command from:', msg.chat.id);
+      
+      // Track the message
+      await analytics.trackMessage(
+        msg.from.id, 
+        msg.from.username, 
+        '/tariff', 
+        'command'
+      );
+      
+      // Get user data
+      const userData = await userManager.loadUserData(msg.from.id);
+      const tariff = TARIFF_PLANS[userData.tariff];
+      
+      let tariffEndInfo = '';
+      if (userData.tariffEndDate) {
+        const endDate = new Date(userData.tariffEndDate);
+        tariffEndInfo = `\nДействует до: ${endDate.toLocaleDateString()}`;
+      }
+      
+      await bot.sendMessage(
+        msg.chat.id,
+        `📊 *Информация о вашем тарифе*\n\nТариф: *${tariff.name}*\nОсталось проверок: *${userData.checksRemaining}*\nИспользовано проверок: *${userData.checksUsed}*${tariffEndInfo}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [createPaymentButtons()]
+          }
+        }
+      );
+    } catch (error) {
+      log('Error sending tariff info:', error);
+      try {
+        await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
+      } catch (retryError) {
+        log('Error sending error message:', retryError);
+      }
+    }
+  });
+
+  // Add admin command to set user tariff
+  bot.onText(/\/admin_set_tariff (.+)/, async (msg, match) => {
+    try {
+      // Check if user is admin
+      if (msg.from.id.toString() !== process.env.ADMIN_USER_ID) {
+        return; // Silently ignore if not admin
+      }
+      
+      const params = match[1].split(' ');
+      if (params.length < 2) {
+        await bot.sendMessage(msg.chat.id, 'Usage: /admin_set_tariff [user_id] [tariff_code]');
+        return;
+      }
+      
+      const targetUserId = parseInt(params[0], 10);
+      const tariffCode = params[1].toUpperCase();
+      
+      if (!TARIFF_PLANS[tariffCode]) {
+        await bot.sendMessage(msg.chat.id, `Invalid tariff code. Available tariffs: ${Object.keys(TARIFF_PLANS).join(', ')}`);
+        return;
+      }
+      
+      // Assign tariff to user
+      const result = await userManager.assignTariff(targetUserId, tariffCode);
+      
+      if (result.success) {
+        await bot.sendMessage(msg.chat.id, `✅ Successfully assigned tariff ${tariffCode} to user ${targetUserId}`);
+        
+        // Notify user about tariff change
+        try {
+          await bot.sendMessage(
+            targetUserId,
+            `✅ Ваш тариф был изменен администратором на "${TARIFF_PLANS[tariffCode].name}".\n\nДоступно проверок: ${result.userData.checksRemaining}`
+          );
+        } catch (notifyError) {
+          log('Error notifying user about tariff change:', notifyError);
+        }
+      } else {
+        await bot.sendMessage(msg.chat.id, `❌ Failed to assign tariff: ${result.reason}`);
+      }
+    } catch (error) {
+      log('Error handling admin_set_tariff command:', error);
+      await bot.sendMessage(msg.chat.id, 'An error occurred while processing the command.');
+    }
+  });
+
+  bot.on('callback_query', async (query) => {
+    try {
+      const chatId = query.message.chat.id;
+
+      // Track callback query
+      await analytics.trackMessage(
+        query.from.id,
+        query.from.username,
+        `callback: ${query.data}`,
+        'callback'
+      );
+
+      if (query.data === 'forecast_info') {
+        await bot.sendMessage(chatId, FORECAST_INFO);
+      } else if (query.data === 'contact_author') {
+        await bot.sendMessage(chatId, AUTHOR_INFO);
+      } else if (query.data.startsWith('tariff_')) {
+        // Handle tariff selection
+        const tariffCode = query.data.split('_')[1];
+        await handleTariffSelection(query.from.id, query.from.username, tariffCode);
+      }
+
+      await bot.answerCallbackQuery(query.id);
+    } catch (error) {
+      log('Error handling callback query:', error);
+    }
+  });
+
+  bot.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+
+    try {
+      log('Processing message:', msg.text);
+      
+      // Track the message
+      await analytics.trackMessage(
+        msg.from.id,
+        msg.from.username,
+        msg.text,
+        'text'
+      );
+      
+      let url = msg.text.trim();
+      
+      if (url.startsWith('@') || !url.includes('/')) {
+        url = await normalizeInstagramInput(url);
+      }
+      
+      const isValidUrl = url.toLowerCase().includes('instagram.com') || url.toLowerCase().includes('tiktok.com');
+      if (!isValidUrl) {
+        await bot.sendMessage(msg.chat.id, 'Чтобы получить статистику по нужному вам профилю, *отправьте 🔗 ссылку* или *username* на аккаунт в бот.', { parse_mode: 'Markdown' });
+        return;
+      }
+
+      // Check if user can make this request (has remaining checks)
+      const canMakeRequest = await checkUserCanMakeRequest(msg.from.id, msg.from.username);
+      if (!canMakeRequest) {
+        return;
+      }
+
+      await bot.sendMessage(msg.chat.id, 'Работаю ⚙️ Не уходите из чата, это займет меньше минуты.');
+
+      let success = false;
+      try {
+        const stats = await fetchSocialStats(url);
+        success = true;
+        
+        // Track successful profile request
+        await analytics.trackProfileRequest(
+          msg.from.id,
+          msg.from.username,
+          url,
+          true
+        );
+        
+        const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+        
+        const response = `*Имя:* ${escapedFullName}
+*URL:* ${stats.profileUrl}
+—————————————————
+
+*👁️ Информация об аккаунте:*
+
+• Подписчиков — ${stats.followers.toLocaleString()}
+• Подписок — ${stats.following.toLocaleString()}
+• Всего публикаций — ${stats.totalPosts.toLocaleString()}
+—————————————————
+
+*📊 Статистика Аккаунта*
+*(за последние 30 дней):*
+
+• Публикаций — ${stats.postsLast30Days.toLocaleString()}
+• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.accountER.toFixed(2)}%
+—————————————————
+
+*📊 Статистика Reels*
+*(за последние 30 дней):*
+
+• Reels — ${stats.reelsLast30Days.toLocaleString()}
+• Медиана просмотров [ⓘ](https://telegra.ph/Formula-Mediany-prosmotrov-06-05) — ${stats.medianViews30Days.toLocaleString()}
+• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.reelsER30Days.toFixed(2)}%
+• ERV [ⓘ](https://telegra.ph/Formula-Engagement-Rate-Views-ERV-06-05) — ${stats.reelsERR30Days.toFixed(2)}%
+—————————————————
+
+*📈 Прогноз Reels:*
+
+• Охват [ⓘ](https://telegra.ph/Formula-prognoza-ohvatov-Reels-06-05) — ${Math.round(stats.predictedReach).toLocaleString()}
+• ER — ${stats.predictedER.toFixed(2)}%
+• ERV — ${stats.predictedERR.toFixed(2)}%
+—————————————————
+
+Чтобы получить статистику по нужному вам профилю, отправьте ссылку или username на аккаунт в бот\\.`;
+
+        const inlineKeyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: 'Как бот составляет прогноз?',
+                  callback_data: 'forecast_info'
+                }
+              ],
+              [
+                {
+                  text: 'Связаться с автором бота',
+                  callback_data: 'contact_author'
+                }
+              ]
+            ]
+          },
+          parse_mode: 'Markdown'
+        };
+
+        await bot.sendMessage(msg.chat.id, response, inlineKeyboard);
+        log('Stats sent successfully for URL:', url);
+      } catch (error) {
+        // Track failed profile request
+        await analytics.trackProfileRequest(
+          msg.from.id,
+          msg.from.username,
+          url,
+          false
+        );
+        
+        log('Error processing message:', error);
+        await bot.sendMessage(msg.chat.id, error.message);
+      }
+    } catch (error) {
+      log('Error in message handler:', error);
+      await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
+    }
+  });
+}
 
 // Start server and bot
 server.listen(PORT, '0.0.0.0', async () => {
@@ -551,175 +927,4 @@ async function normalizeInstagramInput(input) {
   
   // Convert username to URL
   return `https://www.instagram.com/${input}`;
-}
-
-function setupMessageHandlers(bot) {
-  bot.onText(/\/start/, async (msg) => {
-    try {
-      log('Received /start command from:', msg.chat.id);
-      
-      // Track the message
-      await analytics.trackMessage(
-        msg.from.id, 
-        msg.from.username, 
-        '/start', 
-        'command'
-      );
-      
-      await bot.sendMessage(msg.chat.id, 
-        'Чтобы начать работу, отправь в чат ссылку на аккаунт, который нужно проверить'
-      );
-      log('Welcome message sent successfully to:', msg.chat.id);
-    } catch (error) {
-      log('Error sending welcome message:', error);
-      try {
-        await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
-      } catch (retryError) {
-        log('Error sending error message:', retryError);
-      }
-    }
-  });
-
-  bot.on('callback_query', async (query) => {
-    try {
-      const chatId = query.message.chat.id;
-
-      // Track callback query
-      await analytics.trackMessage(
-        query.from.id,
-        query.from.username,
-        `callback: ${query.data}`,
-        'callback'
-      );
-
-      if (query.data === 'forecast_info') {
-        await bot.sendMessage(chatId, FORECAST_INFO);
-      } else if (query.data === 'contact_author') {
-        await bot.sendMessage(chatId, AUTHOR_INFO);
-      }
-
-      await bot.answerCallbackQuery(query.id);
-    } catch (error) {
-      log('Error handling callback query:', error);
-    }
-  });
-
-  bot.on('message', async (msg) => {
-    if (!msg.text || msg.text.startsWith('/')) return;
-
-    try {
-      log('Processing message:', msg.text);
-      
-      // Track the message
-      await analytics.trackMessage(
-        msg.from.id,
-        msg.from.username,
-        msg.text,
-        'text'
-      );
-      
-      let url = msg.text.trim();
-      
-      if (url.startsWith('@') || !url.includes('/')) {
-        url = await normalizeInstagramInput(url);
-      }
-      
-      const isValidUrl = url.toLowerCase().includes('instagram.com') || url.toLowerCase().includes('tiktok.com');
-      if (!isValidUrl) {
-        await bot.sendMessage(msg.chat.id, 'Чтобы получить статистику по нужному вам профилю, *отправьте 🔗 ссылку* или *username* на аккаунт в бот.', { parse_mode: 'Markdown' });
-        return;
-      }
-
-      await bot.sendMessage(msg.chat.id, 'Работаю ⚙️ Не уходите из чата, это займет меньше минуты.');
-
-      let success = false;
-      try {
-        const stats = await fetchSocialStats(url);
-        success = true;
-        
-        // Track successful profile request
-        await analytics.trackProfileRequest(
-          msg.from.id,
-          msg.from.username,
-          url,
-          true
-        );
-        
-        const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-        
-        const response = `*Имя:* ${escapedFullName}
-*URL:* ${stats.profileUrl}
-—————————————————
-
-*👁️ Информация об аккаунте:*
-
-• Подписчиков — ${stats.followers.toLocaleString()}
-• Подписок — ${stats.following.toLocaleString()}
-• Всего публикаций — ${stats.totalPosts.toLocaleString()}
-—————————————————
-
-*📊 Статистика Аккаунта*
-*(за последние 30 дней):*
-
-• Публикаций — ${stats.postsLast30Days.toLocaleString()}
-• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.accountER.toFixed(2)}%
-—————————————————
-
-*📊 Статистика Reels*
-*(за последние 30 дней):*
-
-• Reels — ${stats.reelsLast30Days.toLocaleString()}
-• Медиана просмотров [ⓘ](https://telegra.ph/Formula-Mediany-prosmotrov-06-05) — ${stats.medianViews30Days.toLocaleString()}
-• ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.reelsER30Days.toFixed(2)}%
-• ERV [ⓘ](https://telegra.ph/Formula-Engagement-Rate-Views-ERV-06-05) — ${stats.reelsERR30Days.toFixed(2)}%
-—————————————————
-
-*📈 Прогноз Reels:*
-
-• Охват [ⓘ](https://telegra.ph/Formula-prognoza-ohvatov-Reels-06-05) — ${Math.round(stats.predictedReach).toLocaleString()}
-• ER — ${stats.predictedER.toFixed(2)}%
-• ERV — ${stats.predictedERR.toFixed(2)}%
-—————————————————
-
-Чтобы получить статистику по нужному вам профилю, отправьте ссылку или username на аккаунт в бот\\.`;
-
-        const inlineKeyboard = {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: 'Как бот составляет прогноз?',
-                  callback_data: 'forecast_info'
-                }
-              ],
-              [
-                {
-                  text: 'Связаться с автором бота',
-                  callback_data: 'contact_author'
-                }
-              ]
-            ]
-          },
-          parse_mode: 'Markdown'
-        };
-
-        await bot.sendMessage(msg.chat.id, response, inlineKeyboard);
-        log('Stats sent successfully for URL:', url);
-      } catch (error) {
-        // Track failed profile request
-        await analytics.trackProfileRequest(
-          msg.from.id,
-          msg.from.username,
-          url,
-          false
-        );
-        
-        log('Error processing message:', error);
-        await bot.sendMessage(msg.chat.id, error.message);
-      }
-    } catch (error) {
-      log('Error in message handler:', error);
-      await bot.sendMessage(msg.chat.id, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
-    }
-  });
 }
