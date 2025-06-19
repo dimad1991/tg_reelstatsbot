@@ -1,5 +1,5 @@
 // Tariff plans configuration
-const TARIFF_PLANS = {
+export const TARIFF_PLANS = {
   TEST: {
     name: 'Test',
     maxChecks: 5,
@@ -31,7 +31,7 @@ const TARIFF_PLANS = {
 };
 
 // Message templates for tariff-related notifications
-const MESSAGES = {
+export const MESSAGES = {
   LIMIT_REACHED_TEST: `
 А этот бот хорош, да?
  
@@ -56,7 +56,7 @@ const MESSAGES = {
 };
 
 // Payment button options
-const PAYMENT_BUTTONS = [
+export const PAYMENT_BUTTONS = [
   {
     text: '100 проверок за 1 190 руб/мес',
     tariff: 'S'
@@ -70,11 +70,3 @@ const PAYMENT_BUTTONS = [
     url: 'https://t.me/dimadubovik'
   }
 ];
-
-module.exports = {
-  TARIFF_PLANS,
-  MESSAGES,
-  PAYMENT_BUTTONS
-};
-
-export { TARIFF_PLANS, MESSAGES, PAYMENT_BUTTONS }
