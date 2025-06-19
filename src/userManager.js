@@ -61,7 +61,8 @@ class UserManager {
     }
   }
 
-  async recordProfileCheck(userId) {
+  // Check if user can make a request without deducting
+  async canMakeRequest(userId) {
     try {
       const userData = await this.loadUserData(userId);
       
@@ -70,8 +71,10 @@ class UserManager {
         // Tariff expired, revert to TEST plan with 0 remaining checks
         userData.tariff = 'TEST';
         userData.checksRemaining = 0;
+        userData.checksUsed = 0; // Reset used checks for expired tariff
         userData.tariffStartDate = new Date().toISOString();
         userData.tariffEndDate = null;
+        await this.updateUserData(userData);
       }
 
       // Check if user has remaining checks
@@ -83,6 +86,25 @@ class UserManager {
         };
       }
 
+      return {
+        success: true,
+        userData
+      };
+    } catch (error) {
+      log('Error checking if user can make request:', error);
+      return {
+        success: false,
+        reason: 'ERROR',
+        error
+      };
+    }
+  }
+
+  // Record a successful profile check (deduct from remaining)
+  async recordProfileCheck(userId) {
+    try {
+      const userData = await this.loadUserData(userId);
+      
       // Update user data
       userData.checksUsed += 1;
       if (userData.checksRemaining !== Infinity) {
@@ -128,9 +150,10 @@ class UserManager {
         tariffEndDate = tariffEndDate.toISOString();
       }
 
-      // Update user data
+      // Update user data - reset checks used when assigning new tariff
       userData.tariff = tariffCode;
       userData.checksRemaining = tariff.maxChecks;
+      userData.checksUsed = 0; // Reset used checks for new tariff
       userData.tariffStartDate = now.toISOString();
       userData.tariffEndDate = tariffEndDate;
       
@@ -145,7 +168,7 @@ class UserManager {
         userId,
         userData.username,
         tariffCode,
-        tariff.price,
+        paymentId ? tariff.price : 0, // 0 for manual assignments
         paymentId
       );
       
