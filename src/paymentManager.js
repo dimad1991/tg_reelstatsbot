@@ -1,6 +1,8 @@
-const debug = require('debug')('telegram-bot:payment-manager');
-const crypto = require('crypto');
-const fetch = require('node-fetch');
+import debug from 'debug';
+import crypto from 'crypto';
+import fetch from 'node-fetch';
+
+const log = debug('telegram-bot:payment-manager');
 
 class PaymentManager {
   constructor() {
@@ -36,7 +38,7 @@ class PaymentManager {
 
   async initPayment(userId, tariffCode, username) {
     try {
-      const { TARIFF_PLANS } = require('./tariffs');
+      const { TARIFF_PLANS } = await import('./tariffs.js');
       const tariff = TARIFF_PLANS[tariffCode];
       
       if (!tariff) {
@@ -97,7 +99,7 @@ class PaymentManager {
         paymentId: result.PaymentId
       };
     } catch (error) {
-      debug('Error initializing payment:', error);
+      log('Error initializing payment:', error);
       return {
         success: false,
         error: error.message
@@ -145,7 +147,7 @@ class PaymentManager {
         amount: result.Amount
       };
     } catch (error) {
-      debug('Error checking payment status:', error);
+      log('Error checking payment status:', error);
       return {
         success: false,
         error: error.message
@@ -201,7 +203,7 @@ class PaymentManager {
         paymentData
       };
     } catch (error) {
-      debug('Error handling payment notification:', error);
+      log('Error handling payment notification:', error);
       return {
         success: false,
         error: error.message
@@ -210,6 +212,4 @@ class PaymentManager {
   }
 }
 
-module.exports = PaymentManager;
-
-export default PaymentManager
+export default PaymentManager;
