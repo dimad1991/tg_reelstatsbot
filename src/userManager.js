@@ -1,4 +1,6 @@
-const debug = require('debug')('telegram-bot:user-manager');
+import debug from 'debug';
+
+const log = debug('telegram-bot:user-manager');
 
 class UserManager {
   constructor(analytics) {
@@ -35,7 +37,7 @@ class UserManager {
       await this.analytics.saveUserData(newUser);
       return newUser;
     } catch (error) {
-      debug('Error loading user data:', error);
+      log('Error loading user data:', error);
       // Return a default user object if there's an error
       return {
         userId,
@@ -54,7 +56,7 @@ class UserManager {
       await this.analytics.saveUserData(userData);
       return true;
     } catch (error) {
-      debug('Error updating user data:', error);
+      log('Error updating user data:', error);
       return false;
     }
   }
@@ -94,7 +96,7 @@ class UserManager {
         userData
       };
     } catch (error) {
-      debug('Error recording profile check:', error);
+      log('Error recording profile check:', error);
       return {
         success: false,
         reason: 'ERROR',
@@ -106,7 +108,7 @@ class UserManager {
   async assignTariff(userId, tariffCode, paymentId = null) {
     try {
       const userData = await this.loadUserData(userId);
-      const { TARIFF_PLANS } = require('./tariffs');
+      const { TARIFF_PLANS } = await import('./tariffs.js');
       
       if (!TARIFF_PLANS[tariffCode]) {
         return {
@@ -141,6 +143,7 @@ class UserManager {
       // Track tariff assignment in analytics
       await this.analytics.trackTariffAssignment(
         userId,
+        userData.username,
         tariffCode,
         tariff.price,
         paymentId
@@ -151,7 +154,7 @@ class UserManager {
         userData
       };
     } catch (error) {
-      debug('Error assigning tariff:', error);
+      log('Error assigning tariff:', error);
       return {
         success: false,
         reason: 'ERROR',
@@ -161,6 +164,4 @@ class UserManager {
   }
 }
 
-module.exports = UserManager;
-
-export default UserManager
+export default UserManager;
