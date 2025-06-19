@@ -1,6 +1,8 @@
-const debug = require('debug')('telegram-bot:payment-handler');
-const express = require('express');
-const bodyParser = require('body-parser');
+import debug from 'debug';
+import express from 'express';
+import bodyParser from 'body-parser';
+
+const log = debug('telegram-bot:payment-handler');
 
 class PaymentHandler {
   constructor(paymentManager, userManager, bot) {
@@ -19,13 +21,13 @@ class PaymentHandler {
     // Payment notification endpoint
     this.app.post('/payment/notification', async (req, res) => {
       try {
-        debug('Received payment notification:', req.body);
+        log('Received payment notification:', req.body);
         
         // Process payment notification
         const result = await this.paymentManager.handlePaymentNotification(req.body);
         
         if (!result.success) {
-          debug('Failed to process payment notification:', result.error);
+          log('Failed to process payment notification:', result.error);
           return res.status(400).send('ERROR');
         }
         
@@ -47,17 +49,17 @@ class PaymentHandler {
                 `✅ Оплата успешно прошла!\n\nТариф "${tariffCode}" активирован. Теперь вы можете продолжить использование бота.`
               );
             } catch (error) {
-              debug('Error sending payment success message to user:', error);
+              log('Error sending payment success message to user:', error);
             }
           } else {
-            debug('Failed to assign tariff to user:', tariffResult.reason);
+            log('Failed to assign tariff to user:', tariffResult.reason);
           }
         }
         
         // Return OK to acknowledge receipt of notification
         return res.status(200).send('OK');
       } catch (error) {
-        debug('Error handling payment notification:', error);
+        log('Error handling payment notification:', error);
         return res.status(500).send('ERROR');
       }
     });
@@ -168,7 +170,7 @@ class PaymentHandler {
   start() {
     this.server = this.app.listen(this.port, () => {
       console.log(`Payment handler server running on port ${this.port}`);
-      debug(`Payment handler server running on port ${this.port}`);
+      log(`Payment handler server running on port ${this.port}`);
     });
   }
 
@@ -179,6 +181,4 @@ class PaymentHandler {
   }
 }
 
-module.exports = PaymentHandler;
-
-export default PaymentHandler
+export default PaymentHandler;
