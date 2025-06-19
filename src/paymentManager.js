@@ -48,24 +48,26 @@ class PaymentManager {
       // Generate a unique order ID
       const orderId = `${userId}_${tariffCode}_${Date.now()}`;
       
-      // Prepare payment data
+      // Prepare payment data with proper structure
       const paymentData = {
         TerminalKey: this.terminalKey,
         Amount: tariff.price,
         OrderId: orderId,
         Description: `Тариф ${tariff.name} для @${username || userId}`,
-        DATA: {
+        NotificationURL: process.env.PAYMENT_NOTIFICATION_URL,
+        SuccessURL: process.env.PAYMENT_SUCCESS_URL,
+        FailURL: process.env.PAYMENT_FAIL_URL,
+        DATA: JSON.stringify({
           userId: userId.toString(),
           tariffCode,
           username: username || ''
-        },
-        NotificationURL: process.env.PAYMENT_NOTIFICATION_URL,
-        SuccessURL: process.env.PAYMENT_SUCCESS_URL,
-        FailURL: process.env.PAYMENT_FAIL_URL
+        })
       };
       
       // Generate token
       paymentData.Token = this.generateToken(paymentData);
+      
+      log('Payment initialization data:', JSON.stringify(paymentData, null, 2));
       
       // Make API request to Tinkoff
       const response = await fetch(`${this.apiUrl}Init`, {
@@ -77,6 +79,7 @@ class PaymentManager {
       });
       
       const result = await response.json();
+      log('Payment initialization response:', JSON.stringify(result, null, 2));
       
       if (!result.Success) {
         throw new Error(`Payment initialization failed: ${result.Message || result.Details || 'Unknown error'}`);
