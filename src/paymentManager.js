@@ -23,6 +23,9 @@ class PaymentManager {
     // Remove Token if it exists
     delete tokenParams.Token;
     
+    // Remove DATA from token calculation as it's handled separately
+    delete tokenParams.DATA;
+    
     // Sort keys alphabetically
     const sortedParams = {};
     Object.keys(tokenParams).sort().forEach(key => {
@@ -48,7 +51,7 @@ class PaymentManager {
       // Generate a unique order ID
       const orderId = `${userId}_${tariffCode}_${Date.now()}`;
       
-      // Prepare payment data with proper structure
+      // Prepare payment data with correct format
       const paymentData = {
         TerminalKey: this.terminalKey,
         Amount: tariff.price,
@@ -57,14 +60,15 @@ class PaymentManager {
         NotificationURL: process.env.PAYMENT_NOTIFICATION_URL,
         SuccessURL: process.env.PAYMENT_SUCCESS_URL,
         FailURL: process.env.PAYMENT_FAIL_URL,
-        DATA: JSON.stringify({
+        // DATA should be an object with key-value pairs, not a JSON string
+        DATA: {
           userId: userId.toString(),
-          tariffCode,
+          tariffCode: tariffCode,
           username: username || ''
-        })
+        }
       };
       
-      // Generate token
+      // Generate token (DATA is excluded from token calculation)
       paymentData.Token = this.generateToken(paymentData);
       
       log('Payment initialization data:', JSON.stringify(paymentData, null, 2));
