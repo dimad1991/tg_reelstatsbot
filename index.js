@@ -5,10 +5,11 @@ import fs from 'fs';
 import path from 'path';
 import debug from 'debug';
 import http from 'node:http';
+import express from 'express';
+import bodyParser from 'body-parser';
 import AnalyticsTracker from './src/analytics.js';
 import UserManager from './src/userManager.js';
 import PaymentManager from './src/paymentManager.js';
-import PaymentHandler from './src/paymentHandler.js';
 import { TARIFF_PLANS, MESSAGES, PAYMENT_BUTTONS } from './src/tariffs.js';
 
 const log = debug('telegram-bot');
@@ -26,11 +27,9 @@ if (!process.env.TELEGRAM_BOT_TOKEN) {
 }
 log('Environment variables checked successfully');
 
-// Create HTTP server for Render
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running');
-});
+// Create Express app for handling both bot status and payments
+const app = express();
+app.use(bodyParser.json());
 
 // Initialize bot variables
 let bot = null;
@@ -40,10 +39,163 @@ let isShuttingDown = false;
 // Initialize managers
 let userManager = null;
 let paymentManager = null;
-let paymentHandler = null;
 
 // Explicitly bind to PORT from environment or fallback to 3000
 const PORT = process.env.PORT || 3000;
+
+// Basic route for health check
+app.get('/', (req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running');
+});
+
+// Payment notification endpoint
+app.post('/payment/notification', async (req, res) => {
+  try {
+    log('Received payment notification:', req.body);
+    
+    // Process payment notification
+    const result = await paymentManager.handlePaymentNotification(req.body);
+    
+    if (!result.success) {
+      log('Failed to process payment notification:', result.error);
+      return res.status(400).send('ERROR');
+    }
+    
+    // If payment is confirmed, assign tariff to user
+    if (result.paymentData.status === 'CONFIRMED') {
+      const { userId, tariffCode } = result.paymentData;
+      
+      const tariffResult = await userManager.assignTariff(
+        userId,
+        tariffCode,
+        result.paymentData.paymentId
+      );
+      
+      if (tariffResult.success) {
+        // Notify user about successful payment
+        try {
+          await bot.sendMessage(
+            userId,
+            `✅ Оплата успешно прошла!\n\nТариф "${TARIFF_PLANS[tariffCode].name}" активирован. Теперь вы можете продолжить использование бота.`
+          );
+        } catch (error) {
+          log('Error sending payment success message to user:', error);
+        }
+      } else {
+        log('Failed to assign tariff to user:', tariffResult.reason);
+      }
+    }
+    
+    // Return OK to acknowledge receipt of notification
+    return res.status(200).send('OK');
+  } catch (error) {
+    log('Error handling payment notification:', error);
+    return res.status(500).send('ERROR');
+  }
+});
+
+// Payment success endpoint
+app.get('/payment/success', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Оплата успешна</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f5f5f5;
+          }
+          .success-container {
+            max-width: 500px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          .success-icon {
+            color: #4CAF50;
+            font-size: 48px;
+            margin-bottom: 20px;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-weight: bold;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="success-container">
+          <div class="success-icon">✓</div>
+          <h1>Оплата успешно выполнена!</h1>
+          <p>Ваш тариф активирован. Теперь вы можете вернуться в Telegram и продолжить использование бота.</p>
+          <a href="https://t.me/your_bot_username" class="btn">Вернуться к боту</a>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Payment failure endpoint
+app.get('/payment/fail', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Ошибка оплаты</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f5f5f5;
+          }
+          .fail-container {
+            max-width: 500px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          .fail-icon {
+            color: #F44336;
+            font-size: 48px;
+            margin-bottom: 20px;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #2196F3;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-weight: bold;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="fail-container">
+          <div class="fail-icon">✗</div>
+          <h1>Ошибка оплаты</h1>
+          <p>К сожалению, произошла ошибка при обработке платежа. Пожалуйста, попробуйте еще раз или свяжитесь с поддержкой.</p>
+          <a href="https://t.me/your_bot_username" class="btn">Вернуться к боту</a>
+        </div>
+      </body>
+    </html>
+  `);
+});
 
 // Function to clear any existing webhooks
 async function clearWebhook() {
@@ -103,10 +255,6 @@ async function startBotPolling(retryCount = 0) {
     // Initialize managers
     userManager = new UserManager(analytics);
     paymentManager = new PaymentManager();
-    paymentHandler = new PaymentHandler(paymentManager, userManager, bot);
-    
-    // Start payment handler server
-    paymentHandler.start();
     
     // Set up message handlers
     setupMessageHandlers(bot);
@@ -156,13 +304,6 @@ const gracefulShutdown = async (signal) => {
       console.error('Error stopping bot polling:', error);
       log('Error stopping bot polling:', error);
     }
-  }
-  
-  // Stop payment handler server
-  if (paymentHandler) {
-    paymentHandler.stop();
-    console.log('Payment handler server stopped');
-    log('Payment handler server stopped');
   }
   
   // Sync analytics one last time
@@ -569,7 +710,7 @@ function setupMessageHandlers(bot) {
 }
 
 // Start server and bot
-server.listen(PORT, '0.0.0.0', async () => {
+const server = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server is running on port ${PORT}`);
   log(`Server is running on port ${PORT}`);
   
