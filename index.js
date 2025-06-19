@@ -139,7 +139,7 @@ app.get('/payment/success', (req, res) => {
           <div class="success-icon">✓</div>
           <h1>Оплата успешно выполнена!</h1>
           <p>Ваш тариф активирован. Теперь вы можете вернуться в Telegram и продолжить использование бота.</p>
-          <a href="https://t.me/your_bot_username" class="btn">Вернуться к боту</a>
+          <a href="https://t.me/reelstats_bot" class="btn">Вернуться к боту</a>
         </div>
       </body>
     </html>
@@ -190,7 +190,7 @@ app.get('/payment/fail', (req, res) => {
           <div class="fail-icon">✗</div>
           <h1>Ошибка оплаты</h1>
           <p>К сожалению, произошла ошибка при обработке платежа. Пожалуйста, попробуйте еще раз или свяжитесь с поддержкой.</p>
-          <a href="https://t.me/your_bot_username" class="btn">Вернуться к боту</a>
+          <a href="https://t.me/reelstats_bot" class="btn">Вернуться к боту</a>
         </div>
       </body>
     </html>
