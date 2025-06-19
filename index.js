@@ -204,19 +204,19 @@ process.on('unhandledRejection', (reason, promise) => {
   log('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Function to create payment buttons
+// Function to create payment buttons (stacked vertically)
 function createPaymentButtons() {
   return PAYMENT_BUTTONS.map(button => {
     if (button.url) {
-      return {
+      return [{
         text: button.text,
         url: button.url
-      };
+      }];
     } else {
-      return {
+      return [{
         text: button.text,
         callback_data: `tariff_${button.tariff}`
-      };
+      }];
     }
   });
 }
@@ -224,7 +224,7 @@ function createPaymentButtons() {
 // Function to check if user can make a profile request
 async function checkUserCanMakeRequest(userId, username) {
   try {
-    const result = await userManager.recordProfileCheck(userId);
+    const result = await userManager.canMakeRequest(userId);
     
     if (!result.success) {
       // User has reached their limit
@@ -240,7 +240,7 @@ async function checkUserCanMakeRequest(userId, username) {
         {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [createPaymentButtons()]
+            inline_keyboard: createPaymentButtons()
           }
         }
       );
@@ -272,7 +272,7 @@ async function handleTariffSelection(userId, username, tariffCode) {
     // Send payment link to user
     await bot.sendMessage(
       userId,
-      `🔗 Для оплаты тарифа "${tariffCode}" перейдите по ссылке:\n\n${result.paymentUrl}\n\nПосле успешной оплаты вы получите уведомление, и тариф будет активирован автоматически.`,
+      `🔗 Для оплаты тарифа "${TARIFF_PLANS[tariffCode].name}" перейдите по ссылке:\n\n${result.paymentUrl}\n\nПосле успешной оплаты вы получите уведомление, и тариф будет активирован автоматически.`,
       {
         disable_web_page_preview: true
       }
@@ -342,7 +342,7 @@ function setupMessageHandlers(bot) {
         {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [createPaymentButtons()]
+            inline_keyboard: createPaymentButtons()
           }
         }
       );
@@ -357,16 +357,16 @@ function setupMessageHandlers(bot) {
   });
 
   // Add admin command to set user tariff
-  bot.onText(/\/admin_set_tariff (.+)/, async (msg, match) => {
+  bot.onText(/\/admin_set_tariff(.*)/, async (msg, match) => {
     try {
       // Check if user is admin
       if (msg.from.id.toString() !== process.env.ADMIN_USER_ID) {
         return; // Silently ignore if not admin
       }
       
-      const params = match[1].split(' ');
+      const params = match[1].trim().split(' ').filter(p => p.length > 0);
       if (params.length < 2) {
-        await bot.sendMessage(msg.chat.id, 'Usage: /admin_set_tariff [user_id] [tariff_code]');
+        await bot.sendMessage(msg.chat.id, 'Usage: /admin_set_tariff [user_id] [tariff_code]\n\nAvailable tariff codes: ' + Object.keys(TARIFF_PLANS).join(', '));
         return;
       }
       
@@ -469,6 +469,9 @@ function setupMessageHandlers(bot) {
         const stats = await fetchSocialStats(url);
         success = true;
         
+        // Only deduct check after successful stats retrieval
+        await userManager.recordProfileCheck(msg.from.id);
+        
         // Track successful profile request
         await analytics.trackProfileRequest(
           msg.from.id,
@@ -477,10 +480,12 @@ function setupMessageHandlers(bot) {
           true
         );
         
+        // Escape special characters for Markdown
         const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+        const escapedUrl = stats.profileUrl.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
         
         const response = `*Имя:* ${escapedFullName}
-*URL:* ${stats.profileUrl}
+*URL:* ${escapedUrl}
 —————————————————
 
 *👁️ Информация об аккаунте:*
@@ -547,7 +552,14 @@ function setupMessageHandlers(bot) {
         );
         
         log('Error processing message:', error);
-        await bot.sendMessage(msg.chat.id, error.message);
+        
+        // Check for specific error types
+        let errorMessage = error.message;
+        if (error.message === 'PROFILE_NOT_FOUND') {
+          errorMessage = 'К сожалению, это закрытый аккаунт. Автор установил настройки в режиме «private». Мы не можем проанализировать данные.';
+        }
+        
+        await bot.sendMessage(msg.chat.id, errorMessage);
       }
     } catch (error) {
       log('Error in message handler:', error);
@@ -888,7 +900,7 @@ async function fetchSocialStats(url) {
         errorMessage = 'Ошибка конфигурации бота. Пожалуйста, обратитесь к администратору.';
         break;
       case 'PROFILE_NOT_FOUND':
-        errorMessage = 'Профиль не найден. Проверьте правильность ссылки или username.';
+        errorMessage = 'К сожалению, это закрытый аккаунт. Автор установил настройки в режиме «private». Мы не можем проанализировать данные.';
         break;
       case 'INSTAGRAM_SERVER_ERROR':
         errorMessage = 'Instagram временно недоступен. Пожалуйста, попробуйте через несколько минут.';
