@@ -555,10 +555,40 @@ function setupMessageHandlers(bot) {
         'callback'
       );
 
-      if (query.data === 'forecast_info') {
-        await bot.sendMessage(chatId, FORECAST_INFO);
-      } else if (query.data === 'contact_author') {
-        await bot.sendMessage(chatId, AUTHOR_INFO);
+      if (query.data === 'tariff_info') {
+        // Handle tariff info button - same as /tariff command
+        const userData = await userManager.loadUserData(query.from.id);
+        const tariff = TARIFF_PLANS[userData.tariff];
+        
+        let tariffEndInfo = '';
+        if (userData.tariffEndDate) {
+          const endDate = new Date(userData.tariffEndDate);
+          tariffEndInfo = `\nДействует до: ${endDate.toLocaleDateString()}`;
+        }
+        
+        await bot.sendMessage(
+          chatId,
+          `📊 *Информация о вашем тарифе*\n\nТариф: *${tariff.name}*\nОсталось проверок: *${userData.checksRemaining}*\nИспользовано проверок: *${userData.checksUsed}*${tariffEndInfo}`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: createPaymentButtons()
+            }
+          }
+        );
+      } else if (query.data === 'feedback') {
+        // Handle feedback button
+        await bot.sendMessage(
+          chatId,
+          `Привет! Я Дима, CEO и сооснователь UGC платформы Uno Dos Trends -> https://unodostrends.com/
+
+Мы разработали этот бот для внутреннего анализа Reels — он помогает нам работать с блогерами в масштабе. Теперь решили открыть доступ всем.
+
+C предложениями по улучшению пишите в личку -> https://t.me/dimadubovik`,
+          {
+            disable_web_page_preview: true
+          }
+        );
       } else if (query.data.startsWith('tariff_')) {
         // Handle tariff selection
         const tariffCode = query.data.split('_')[1];
@@ -666,14 +696,14 @@ function setupMessageHandlers(bot) {
             inline_keyboard: [
               [
                 {
-                  text: 'Как бот составляет прогноз?',
-                  callback_data: 'forecast_info'
+                  text: 'Информация о вашем тарифе',
+                  callback_data: 'tariff_info'
                 }
               ],
               [
                 {
-                  text: 'Связаться с автором бота',
-                  callback_data: 'contact_author'
+                  text: 'Оставить обратную связь',
+                  callback_data: 'feedback'
                 }
               ]
             ]
@@ -777,22 +807,6 @@ const CIRCUIT_BREAKER = {
   threshold: 3,
   resetTimeout: 5 * 60 * 1000, // 5 minutes
 };
-
-const FORECAST_INFO = `За основу мы берем медианные значения просмотров Reels, ER Reels, ERR Reels в аккаунте за последний период.  
-
-Используя собственный опыт, экспертизу в работе с Instagram и методы анализа с помощью ИИ мы вывели формулу зависимости охватов от нескольких дополнительных параметров.   
-
-Каждый из параметров трансформирован в коэффициент, на который умножается базовое значение медианы.  
-
-Примеры влияющих на итоговый прогноз параметров: частота публикации Reels в профиле, динамика изменения ER и ERR, прострелы Reels по охватам за определенный период времени, категория блога и др.   
-
-В итоге мы получаем прогнозируемое значение. На итоговые охваты вашей интеграции влияют субъективные факторы, которые мы предусмотреть не можем: использование популярных треков, нативность/рекламность интеграции, использование продуктов в тематике блогера и др.`;
-
-const AUTHOR_INFO = `Привет! Я Дима, CEO и сооснователь UGC платформы Uno Dos Trends -> https://t.me/dimadubovik
-
-Этот бот был создан, чтобы помочь нам внутри прогнозировать результаты от работы с блогерами, но вышел за рамки нашей команды. 
-
-C предложениями по улучшению или просто так пишите в личку -> https://t.me/dimadubovik`;
 
 const checkBotLock = () => {
   try {
@@ -1078,6 +1092,6 @@ async function normalizeInstagramInput(input) {
     return input;
   }
   
-  // Convert username to URL
+  // Convert username to URL - DO NOT escape dots here
   return `https://www.instagram.com/${input}`;
 }
