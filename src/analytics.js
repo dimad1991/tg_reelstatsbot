@@ -388,42 +388,83 @@ class AnalyticsTracker {
   }
 
   async updateUserStatistics() {
-    if (!this.initialized || this.userStats.size === 0) return;
+    if (!this.initialized) return;
 
     try {
-      // Clear existing data (except headers)
-      await this.sheets.spreadsheets.values.clear({
+      // FIXED: Instead of clearing all data, we'll merge existing data with cached data
+      
+      // First, get all existing data from the sheet
+      const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
-        range: 'User Statistics!A2:Z'
+        range: 'User Statistics!A:K'
       });
 
-      // Prepare user statistics data
-      const userData = Array.from(this.userStats.entries()).map(([userId, stats]) => [
-        userId,
-        stats.username,
-        stats.totalMessages,
-        stats.profileRequests,
-        stats.firstSeen,
-        stats.lastSeen,
-        stats.tariff || 'TEST',
-        stats.checksRemaining || 5,
-        stats.checksUsed || 0,
-        stats.tariffStartDate || stats.firstSeen,
-        stats.tariffEndDate || ''
-      ]);
+      const rows = response.data.values || [];
+      const headers = rows.length > 0 ? rows[0] : [];
+      const existingData = rows.slice(1); // Skip header row
 
-      if (userData.length > 0) {
+      // Create a map of existing users by User ID
+      const existingUsers = new Map();
+      const userIdIndex = headers.indexOf('User ID');
+      
+      if (userIdIndex !== -1) {
+        existingData.forEach(row => {
+          if (row[userIdIndex]) {
+            const userId = parseInt(row[userIdIndex], 10);
+            if (!isNaN(userId)) {
+              existingUsers.set(userId, row);
+            }
+          }
+        });
+      }
+
+      log(`Found ${existingUsers.size} existing users in spreadsheet`);
+      log(`Have ${this.userStats.size} users in cache`);
+
+      // Merge cached users with existing users
+      for (const [userId, stats] of this.userStats.entries()) {
+        const userData = [
+          userId,
+          stats.username,
+          stats.totalMessages,
+          stats.profileRequests,
+          stats.firstSeen,
+          stats.lastSeen,
+          stats.tariff || 'TEST',
+          stats.checksRemaining || 5,
+          stats.checksUsed || 0,
+          stats.tariffStartDate || stats.firstSeen,
+          stats.tariffEndDate || ''
+        ];
+        
+        // Update or add user data
+        existingUsers.set(userId, userData);
+      }
+
+      // Convert map back to array
+      const allUserData = Array.from(existingUsers.values());
+      
+      log(`Total users to write: ${allUserData.length}`);
+
+      if (allUserData.length > 0) {
+        // Clear existing data (except headers) and write all data
+        await this.sheets.spreadsheets.values.clear({
+          spreadsheetId: this.spreadsheetId,
+          range: 'User Statistics!A2:K'
+        });
+
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: this.spreadsheetId,
           range: 'User Statistics!A2',
           valueInputOption: 'RAW',
           resource: {
-            values: userData
+            values: allUserData
           }
         });
+
+        log(`Successfully updated user statistics with ${allUserData.length} users`);
       }
 
-      log('Updated user statistics');
     } catch (error) {
       console.error('Error updating user statistics:', error.message);
       log('Error updating user statistics:', error);
@@ -435,9 +476,24 @@ class AnalyticsTracker {
 
     try {
       const timestamp = new Date().toISOString();
-      const uniqueUsers = this.userStats.size;
+      
+      // Get total unique users from the actual User Statistics sheet
+      let totalUniqueUsers = this.userStats.size;
+      
+      try {
+        const response = await this.sheets.spreadsheets.values.get({
+          spreadsheetId: this.spreadsheetId,
+          range: 'User Statistics!A:A'
+        });
+        
+        const rows = response.data.values || [];
+        // Subtract 1 for header row, but ensure it's not negative
+        totalUniqueUsers = Math.max(rows.length - 1, 0);
+      } catch (error) {
+        log('Error getting user count from sheet, using cache:', error);
+      }
 
-      // Count users by tariff
+      // Count users by tariff from cache (this is approximate)
       const tariffCounts = {};
       for (const [_, stats] of this.userStats.entries()) {
         const tariff = stats.tariff || 'TEST';
@@ -446,13 +502,13 @@ class AnalyticsTracker {
 
       const summaryData = [
         ['Total Messages', this.totalMessages, timestamp],
-        ['Unique Users', uniqueUsers, timestamp],
+        ['Unique Users', totalUniqueUsers, timestamp],
         ['Total Profile Requests', this.totalProfiles, timestamp]
       ];
 
       // Add tariff counts
       Object.entries(tariffCounts).forEach(([tariff, count]) => {
-        summaryData.push([`Users on ${tariff} Tariff`, count, timestamp]);
+        summaryData.push([`Users on ${tariff} Tariff (Cache)`, count, timestamp]);
       });
 
       // Clear existing data (except headers)
