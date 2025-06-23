@@ -651,15 +651,14 @@ C предложениями по улучшению пишите в личку 
           true
         );
         
-        // Escape special characters for Markdown
+        // Escape special characters for Markdown - but NOT for URLs in hyperlinks
         const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-        const escapedUrl = stats.profileUrl.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
         
-        // Format top reels sections
+        // Format top reels sections with proper hyperlinks
         let topReelsByViewsText = '';
         if (stats.topReelsByViews && stats.topReelsByViews.length > 0) {
           topReelsByViewsText = stats.topReelsByViews.map((reel, index) => 
-            `    ${index + 1}\\. [Reel](${reel.url.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')}) — ${reel.views.toLocaleString()} просмотров`
+            `    ${index + 1}. [Reel](${reel.url}) — ${reel.views.toLocaleString()} просмотров`
           ).join('\n');
         } else {
           topReelsByViewsText = '    Недостаточно данных';
@@ -668,14 +667,14 @@ C предложениями по улучшению пишите в личку 
         let topReelsByERText = '';
         if (stats.topReelsByER && stats.topReelsByER.length > 0) {
           topReelsByERText = stats.topReelsByER.map((reel, index) => 
-            `    ${index + 1}\\. [Reel](${reel.url.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')}) — ${reel.er.toFixed(2)}%`
+            `    ${index + 1}. [Reel](${reel.url}) — ${reel.er.toFixed(2)}%`
           ).join('\n');
         } else {
           topReelsByERText = '    Недостаточно данных';
         }
         
         const response = `*Имя:* ${escapedFullName}
-*URL:* ${escapedUrl}
+*URL:* [${stats.profileUrl}](${stats.profileUrl})
 —————————————————
 
 *👁️ Информация об аккаунте:*
@@ -700,10 +699,10 @@ C предложениями по улучшению пишите в личку 
 • ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.reelsER30Days.toFixed(2)}%
 • ERV [ⓘ](https://telegra.ph/Formula-Engagement-Rate-Views-ERV-06-05) — ${stats.reelsERR30Days.toFixed(2)}%
 
-• Топ\\-3 Reels за 30 дней по охвату:
+• Топ-3 Reels за 30 дней по охвату:
 ${topReelsByViewsText}
 
-• Топ\\-3 Reels за 30 дней по ER:
+• Топ-3 Reels за 30 дней по ER:
 ${topReelsByERText}
 —————————————————
 
@@ -1130,7 +1129,7 @@ async function fetchSocialStats(url) {
     return {
       username: profileData.username,
       fullName: profileData.full_name,
-      profileUrl: url,
+      profileUrl: url, // Return the original URL without escaping
       followers: profileData.follower_count,
       following: profileData.following_count,
       totalPosts: profileData.media_count,
