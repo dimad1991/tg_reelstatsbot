@@ -655,6 +655,25 @@ C предложениями по улучшению пишите в личку 
         const escapedFullName = stats.fullName.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
         const escapedUrl = stats.profileUrl.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
         
+        // Format top reels sections
+        let topReelsByViewsText = '';
+        if (stats.topReelsByViews && stats.topReelsByViews.length > 0) {
+          topReelsByViewsText = stats.topReelsByViews.map((reel, index) => 
+            `    ${index + 1}\\. [Reel](${reel.url.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')}) — ${reel.views.toLocaleString()} просмотров`
+          ).join('\n');
+        } else {
+          topReelsByViewsText = '    Недостаточно данных';
+        }
+
+        let topReelsByERText = '';
+        if (stats.topReelsByER && stats.topReelsByER.length > 0) {
+          topReelsByERText = stats.topReelsByER.map((reel, index) => 
+            `    ${index + 1}\\. [Reel](${reel.url.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')}) — ${reel.er.toFixed(2)}%`
+          ).join('\n');
+        } else {
+          topReelsByERText = '    Недостаточно данных';
+        }
+        
         const response = `*Имя:* ${escapedFullName}
 *URL:* ${escapedUrl}
 —————————————————
@@ -680,6 +699,12 @@ C предложениями по улучшению пишите в личку 
 • Медиана просмотров [ⓘ](https://telegra.ph/Formula-Mediany-prosmotrov-06-05) — ${stats.medianViews30Days.toLocaleString()}
 • ER [ⓘ](https://telegra.ph/Formula-Engagement-Rate-ER-06-05) — ${stats.reelsER30Days.toFixed(2)}%
 • ERV [ⓘ](https://telegra.ph/Formula-Engagement-Rate-Views-ERV-06-05) — ${stats.reelsERR30Days.toFixed(2)}%
+
+• Топ\\-3 Reels за 30 дней по охвату:
+${topReelsByViewsText}
+
+• Топ\\-3 Reels за 30 дней по ER:
+${topReelsByERText}
 —————————————————
 
 *📈 Прогноз Reels:*
@@ -915,6 +940,11 @@ async function fetchWithRetry(url, options, retries = MAX_RETRIES, isRetry = fal
   }
 }
 
+// Function to generate Instagram reel URL from code
+function generateReelUrl(code) {
+  return `https://www.instagram.com/reel/${code}/`;
+}
+
 async function fetchSocialStats(url) {
   let profileData = null;
   let reelsData = null;
@@ -999,8 +1029,78 @@ async function fetchSocialStats(url) {
     const viewCounts30Days = reelsLast30Days
       .map(reel => reel.play_count)
       .sort((a, b) => a - b);
-    const medianViews30Days = viewCounts30Days.length > 0 ?
+    let medianViews30Days = viewCounts30Days.length > 0 ?
       viewCounts30Days[Math.floor(viewCounts30Days.length / 2)] : 0;
+
+    // FALLBACK LOGIC: If 30-day median is 0, use last 5 reels
+    let finalMedianViews = medianViews30Days;
+    let finalReelsER = reelsER30Days;
+    let finalReelsERR = reelsERR30Days;
+
+    if (medianViews30Days === 0 || reelsER30Days === 0 || reelsERR30Days === 0) {
+      // Get last 5 reels regardless of date
+      const last5Reels = reelsData
+        .filter(reel => reel.media_type === 2)
+        .slice(0, 5);
+
+      if (last5Reels.length > 0) {
+        // Calculate fallback median views from last 5 reels
+        if (medianViews30Days === 0) {
+          const last5ViewCounts = last5Reels
+            .map(reel => reel.play_count)
+            .sort((a, b) => a - b);
+          finalMedianViews = last5ViewCounts[Math.floor(last5ViewCounts.length / 2)] || 0;
+          log(`Using fallback median views from last 5 reels: ${finalMedianViews}`);
+        }
+
+        // Calculate fallback Reels ER from last 5 reels
+        if (reelsER30Days === 0) {
+          const totalLast5Engagement = last5Reels.reduce((sum, reel) => {
+            return sum + reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
+          }, 0);
+          const averageLast5Engagement = totalLast5Engagement / last5Reels.length;
+          finalReelsER = (averageLast5Engagement / profileData.follower_count) * 100;
+          log(`Using fallback Reels ER from last 5 reels: ${finalReelsER}`);
+        }
+
+        // Calculate fallback Reels ERV from last 5 reels
+        if (reelsERR30Days === 0) {
+          const totalLast5Views = last5Reels.reduce((sum, reel) => sum + reel.play_count, 0);
+          const averageLast5Views = totalLast5Views / last5Reels.length;
+          const totalLast5Engagement = last5Reels.reduce((sum, reel) => {
+            return sum + reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
+          }, 0);
+          const averageLast5Engagement = totalLast5Engagement / last5Reels.length;
+          
+          finalReelsERR = averageLast5Views > 0 ? 
+            (averageLast5Engagement / averageLast5Views) * 100 : 0;
+          log(`Using fallback Reels ERV from last 5 reels: ${finalReelsERR}`);
+        }
+      }
+    }
+
+    // Calculate Top-3 Reels by Views (last 30 days)
+    const topReelsByViews = reelsLast30Days
+      .sort((a, b) => b.play_count - a.play_count)
+      .slice(0, 3)
+      .map(reel => ({
+        url: generateReelUrl(reel.code),
+        views: reel.play_count
+      }));
+
+    // Calculate Top-3 Reels by ER (last 30 days)
+    const topReelsByER = reelsLast30Days
+      .map(reel => {
+        const engagement = reel.like_count + reel.comment_count + (reel.share_count || 0) + (reel.saves_count || 0);
+        const er = (engagement / profileData.follower_count) * 100;
+        return {
+          url: generateReelUrl(reel.code),
+          er: er,
+          engagement: engagement
+        };
+      })
+      .sort((a, b) => b.er - a.er)
+      .slice(0, 3);
 
     // Calculate prediction coefficients
     const reelsCountCoef = reelsLast30Days.length >= 10 ? 1.2 : 0.8;
@@ -1019,12 +1119,13 @@ async function fetchSocialStats(url) {
       .filter(reel => reel.media_type === 2)
       .slice(0, 3);
 
-    const hasViralReel = last3Reels.some(reel => reel.play_count > medianViews30Days * 10);
+    const hasViralReel = last3Reels.some(reel => reel.play_count > finalMedianViews * 10);
     const viralCoef = hasViralReel ? 1.4 : 1;
 
-    const predictedReach = medianViews30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
-    const predictedER = reelsER30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
-    const predictedERR = reelsERR30Days * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    // Use final values (with fallback applied) for predictions
+    const predictedReach = finalMedianViews * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const predictedER = finalReelsER * reelsCountCoef * viewsToFollowersCoef * viralCoef;
+    const predictedERR = finalReelsERR * reelsCountCoef * viewsToFollowersCoef * viralCoef;
 
     return {
       username: profileData.username,
@@ -1036,9 +1137,11 @@ async function fetchSocialStats(url) {
       postsLast30Days: postsLast30Days.length,
       accountER,
       reelsLast30Days: reelsLast30Days.length,
-      medianViews30Days,
-      reelsER30Days,
-      reelsERR30Days,
+      medianViews30Days: finalMedianViews, // Use final value (with fallback)
+      reelsER30Days: finalReelsER, // Use final value (with fallback)
+      reelsERR30Days: finalReelsERR, // Use final value (with fallback)
+      topReelsByViews, // New field
+      topReelsByER, // New field
       predictedReach,
       predictedER,
       predictedERR
